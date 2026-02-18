@@ -117,12 +117,12 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
     source_centroid = [results[1], results[2]]
     lens_centroid = [results[3], results[4]]
     ax.plot(source_centroid[1], source_centroid[0],'.',color = 'blue' ,markersize=0.1)
-    ax.plot(lens_centroid[1], lens_centroid[0],'.',color='orange',markersize=0.1)
+    ax.plot(lens_centroid[1], lens_centroid[0],'.',color='chartreuse',markersize=0.1)
     ax.plot(combined_centroid[1], combined_centroid[0], '.',color='coral',markersize=0.1)
 
 
     ax.plot(-1000,1000,'.',label = 'source centroid',markersize=10,color = 'blue')
-    ax.plot(-1000, 1000, '.', label='lens centroid', markersize=10, color='orange')
+    ax.plot(-1000, 1000, '.', label='lens centroid', markersize=10, color='chartreuse')
     ax.plot(-1000, 1000, '.', label='combined centroid', markersize=10, color='coral')
     ax.legend()
     ran = 1
@@ -133,8 +133,9 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
     plt.show()
 
     F146_data = F146_data.loc[:,['HJD_prime','mag','err']]
-    F146_data['source_centroid_RA'] = lens_centroid[1]
-    F146_data['source_centroid_Dec'] = lens_centroid[0]
+    F146_data['magnification'] = results[0]
+    F146_data['source_centroid_RA'] = source_centroid[1]
+    F146_data['source_centroid_Dec'] = source_centroid[0]
     F146_data['lens_centroid_RA'] = lens_centroid[1]
     F146_data['lens_centroid_Dec'] = lens_centroid[0]
     F146_data['centroid_RA'] = combined_centroid[1]
