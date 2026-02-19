@@ -6,7 +6,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 import matplotlib.pyplot as plt
 
-def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, model_name_,output_dir_):
+def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, model_name_, output_dir_, make_plot_=True):
 
     ### Set up VBMicrolensing
     coordinatefile = f'{events_directory_path_}/{event_name_}/Data/event.coordinates'
@@ -105,32 +105,8 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
 
     # combine the centroids
     combined_centroid = vbm.CombineCentroids(results, g)
-
-    fig,axs = plt.subplots(1,2,figsize = (10,5),layout = 'constrained')
-    ax = axs[0]
-    ax.plot(times,results[0],'.')
-    ax.set_xlabel('HJD - 2450000')
-    ax.set_ylabel('Magnification')
-    ax.set_xlim(parameters[6]-np.exp(parameters[5]),parameters[6]+np.exp(parameters[5]))
-
-    ax = axs[1]
     source_centroid = [results[1], results[2]]
     lens_centroid = [results[3], results[4]]
-    ax.plot(source_centroid[1], source_centroid[0],'.',color = 'blue' ,markersize=0.1)
-    ax.plot(lens_centroid[1], lens_centroid[0],'.',color='chartreuse',markersize=0.1)
-    ax.plot(combined_centroid[1], combined_centroid[0], '.',color='coral',markersize=0.1)
-
-
-    ax.plot(-1000,1000,'.',label = 'source centroid',markersize=10,color = 'blue')
-    ax.plot(-1000, 1000, '.', label='lens centroid', markersize=10, color='chartreuse')
-    ax.plot(-1000, 1000, '.', label='combined centroid', markersize=10, color='coral')
-    ax.legend()
-    ran = 1
-    ax.set_ylim(-ran, ran)
-    ax.set_xlim(ran, -ran)
-    ax.set_xlabel('dRA (mas)')
-    ax.set_ylabel('dDec (mas)')
-    plt.show()
 
     F146_data = F146_data.loc[:,['HJD_prime','mag','err']]
     F146_data['magnification'] = results[0]
@@ -138,20 +114,81 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
     F146_data['source_centroid_Dec'] = source_centroid[0]
     F146_data['lens_centroid_RA'] = lens_centroid[1]
     F146_data['lens_centroid_Dec'] = lens_centroid[0]
-    F146_data['centroid_RA'] = combined_centroid[1]
-    F146_data['centroid_Dec'] = combined_centroid[0]
+    F146_data['lens_source_centroid_RA'] = combined_centroid[1]
+    F146_data['lens_source_centroid_Dec'] = combined_centroid[0]
 
+    background_centroids_ra = np.zeros((F146_data.shape[0],1))
+    background_centroids_dec = np.zeros((F146_data.shape[0],1))
+
+    background_centroids_ra[:,0] = F146_data['source_centroid_RA']+1/(2*np.sqrt(2))
+    background_centroids_dec[:,0] = F146_data['source_centroid_Dec']+1/(2*np.sqrt(2))
+    background_g = np.array([gulls_g-g])
+    print(background_centroids_ra.shape,background_g.shape)
+    CombineNCentroids(results=F146_data,g=g,background_centroids_ra=background_centroids_ra,
+                      background_centroids_dec=background_centroids_dec,g_background=background_g)
     save_path = f'{output_dir_}/{event_name_}_F146_astrometry.dat'
     F146_data.to_csv(save_path,index=False,sep=' ')
 
+    if make_plot_:
+        plot_centroids(F146_data,parameters,1)
+
+# void VBMicrolensing::CombineCentroids(double* mags, double* c1s, double* c2s, double* c1l, double* c2l, double* c1tot, double* c2tot, double g, int np) {
+# 	double fac;
+# 	for (int i = 0; i < np; i++) {
+# 		fac = 1 / (mags[i] + g);
+# 		c1tot[i] = (c1s[i] * mags[i] + c1l[i] * g) * fac;
+# 		c2tot[i] = (c2s[i] * mags[i] + c2l[i] * g) * fac;
+
+def CombineNCentroids(results,g, background_centroids_ra,background_centroids_dec,g_background):
+    if type(g_background)!=np.ndarray:
+        g_background = np.array(g_background)
+
+    weighted_source_lens_centroids_ra = results.loc[:, ['source_centroid_RA', 'lens_centroid_RA']].values
+    weighted_source_lens_centroids_ra[:, 0] *= results.loc[:, 'magnification']
+    weighted_source_lens_centroids_ra[:, 1] *= g
+
+    weighted_source_lens_centroids_dec = results.loc[:, ['source_centroid_Dec', 'lens_centroid_Dec']].values
+    weighted_source_lens_centroids_dec[:, 0] *= results.loc[:, 'magnification']
+    weighted_source_lens_centroids_dec[:, 1] *= g
+
+    weighted_centroids_ra = np.concatenate([weighted_source_lens_centroids_ra, background_centroids_ra * g_background], axis=1)
+    weighted_centroids_dec = np.concatenate([weighted_source_lens_centroids_dec, background_centroids_dec * g_background],
+                                           axis=1)
+    fac_array = 1 / (results['magnification'].values + g + np.sum(g_background))
+
+    results['centroid_RA'] = fac_array * np.sum(weighted_centroids_ra, axis=1)
+    results['centroid_Dec'] = fac_array * np.sum(weighted_centroids_dec, axis=1)
+
+    return results
 
 
 
+def plot_centroids(F146_data,parameters, windowsize = 1):
+    fig, axs = plt.subplots(1, 2, figsize=(10, 5), layout='constrained')
+    ax = axs[0]
+    ax.plot(F146_data['HJD_prime'], F146_data['magnification'], '.')
+    ax.set_xlabel('HJD - 2450000')
+    ax.set_ylabel('Magnification')
+    ax.set_xlim(parameters[6] - np.exp(parameters[5]), parameters[6] + np.exp(parameters[5]))
 
+    ax = axs[1]
 
+    ax.plot(F146_data['source_centroid_RA'], F146_data['source_centroid_Dec'], '.', color='blue', markersize=0.1)
+    ax.plot(F146_data['lens_centroid_RA'], F146_data['lens_centroid_Dec'], '.', color='chartreuse', markersize=0.1)
+    ax.plot(F146_data['lens_source_centroid_RA'], F146_data['lens_source_centroid_Dec'], '.', color='black', markersize=0.1)
+    ax.plot(F146_data['centroid_RA'],F146_data['centroid_Dec'], '.', color='coral', markersize=0.1)
 
-
-
+    ax.plot(-1000, 1000, '.', label='source centroid', markersize=10, color='blue')
+    ax.plot(-1000, 1000, '.', label='lens centroid', markersize=10, color='chartreuse')
+    ax.plot(-1000, 1000, '.', label='lens source centroid', markersize=10, color='black')
+    ax.plot(-1000, 1000, '.', label='combined centroid', markersize=10, color='coral')
+    ax.legend()
+    ran = windowsize
+    ax.set_ylim(-ran, ran)
+    ax.set_xlim(ran, -ran)
+    ax.set_xlabel('dRA (mas)')
+    ax.set_ylabel('dDec (mas)')
+    plt.show()
 
 def find_event_in_catalog(catalog,event_name_):
     '''
@@ -170,6 +207,7 @@ if __name__ == "__main__":
     events_directory_path = "./sample_rtmodel_v3.2_ICGS" # results from Stela's runs
     satellitedir = "./satellitedir" # Ephemeris in VBM format
     output_dir = './' #Where you want to save the files
+    make_plot = True
     event_name = sys.argv[1]
     try:
         model_name = sys.argv[2]
@@ -178,7 +216,7 @@ if __name__ == "__main__":
         model_name = None
         raise ValueError('For now you must provide a model name.')
     main(catalog_path_=catalog_path,events_directory_path_=events_directory_path,satellitedir_=satellitedir,
-         event_name_=event_name,model_name_=model_name,output_dir_=output_dir)
+         event_name_=event_name,model_name_=model_name,output_dir_=output_dir,make_plot_=make_plot)
 
 
 
