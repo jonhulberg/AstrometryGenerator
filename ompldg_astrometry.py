@@ -115,9 +115,16 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
     #######################################
     # Calculate magnification and centroids
     ########################################
+    nodef_parameters = parameters.copy()
+    nodef_parameters[-1] /= 1000
+
+    times2 = np.linspace(np.min(times),np.max(times),100_000)
     if model_name_[0:2] == 'LS' or model_name_[0:2] =='LX':
+        results_nodef = vbm.BinaryAstroLightCurve(nodef_parameters,times)
         results = vbm.BinaryAstroLightCurve(parameters,times)
+        results2 = vbm.BinaryAstroLightCurve(parameters, times2)
     else:
+        results_nodef = vbm.BinaryAstroLightOrbital(nodef_parameters, times)
         results = vbm.BinaryAstroLightCurveOrbital(parameters, times)
     print('Model Paramters')
     print(parameters)
@@ -149,9 +156,22 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
     print(f'Lens contributes {100 * g_measured_lens / g_measured_total} % of total blend flux')
     print("-------------------------------------------------------")
     print(f'fs_gulls/fs_measured = {fs/fs_measured}')
+
     # combine the centroids
+
+    #copy lens centroid from actual event
+    results_nodef[3] = results[3]
+    results_nodef[4] = results[4]
+    combined_centroid_nodef = vbm.CombineCentroids(results_nodef, g_measured_lens)
+
+    source_centroid_nodef = [results_nodef[1], results_nodef[2]]
+    lens_centroid_nodef = [results_nodef[3], results_nodef[4]]
+    ##############################################################
+
     combined_centroid = vbm.CombineCentroids(results, g_measured_lens)
     source_centroid = [results[1], results[2]]
+
+    source_centroid2 = [results2[1], results2[2]]
     lens_centroid = [results[3], results[4]]
     #print(results[2][0],results[1][0])
 
@@ -165,6 +185,17 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
     F146_data['lens_centroid_Dec'] = lens_centroid[0]
     F146_data['true_centroid_RA'] = combined_centroid[1]
     F146_data['true_centroid_Dec'] = combined_centroid[0]
+
+    #F146_data['cont_centroid_RA'] = source_centroid2[1]
+    #F146_data['cont_centroid_Dec'] = source_centroid2[0]
+
+    F146_data['nodef_source_centroid_RA'] = source_centroid_nodef[1]
+    F146_data['nodef_source_centroid_Dec'] = source_centroid_nodef[0]
+    #F146_data['lens_centroid_RA'] = lens_centroid[1]
+    #F146_data['lens_centroid_Dec'] = lens_centroid[0]
+    F146_data['nodef_centroid_RA'] = combined_centroid_nodef[1]
+    F146_data['nodef_centroid_Dec'] = combined_centroid_nodef[0]
+
 
     # background_centroids_ra = np.zeros((F146_data.shape[0],1))
     # background_centroids_dec = np.zeros((F146_data.shape[0],1))
@@ -213,8 +244,8 @@ def main(catalog_path_, events_directory_path_, satellitedir_, event_name_, mode
 
     F146_data.to_csv(save_path,index=False,sep=' ', mode='a',na_rep='NaN')
     if type(plot_folder) is not None:
-        savepath = f'{plot_folder}/{event_name_}_F146_astrometry_noisefloor1.1mas.png'
-        plot_centroids(F146_data,parameters,savepath = savepath,windowsize=windowsize)
+        savepath = f'{plot_folder}/{event_name_}_F146_astrometry_noisefloor{noise_str}mas.png'
+        plot_centroids(F146_data,parameters,savepath = savepath,windowsize=windowsize,scont = source_centroid2)
 
 # void VBMicrolensing::CombineCentroids(double* mags, double* c1s, double* c2s, double* c1l, double* c2l, double* c1tot, double* c2tot, double g, int np) {
 # 	double fac;
@@ -242,6 +273,33 @@ def get_input_parameters_string(event_in_catalog):
     input_pars = [s,q,u0_lens1,alpha,rho,tE_ref,t0_lens1,piEN, piEE]
     return input_pars
 
+
+def compute_undeflected_source_trajectory(results, pars):
+
+    #Follows almost exactly V. Bozza's VBNIcrolensing ComputeCentroids function.
+
+    dPosAng = 0
+    thetaE = pars[-1]
+    alpha = pars[3]
+    piEN = pars[7]
+    piEE = pars[8]
+    c1s = np.array(results[5])
+    c2s = np.array(results[6])
+    c1 = c1s[0] * thetaE  # Centroid coordinates come in x1,x2 system of the lens
+    c2 = c2s[0] * thetaE
+
+    PosAng = np.atan2(piEN,
+                      piEE) - alpha + dPosAng  # Angle between North and axis x1 of the lens system counterclockwise
+
+    c1prov = c1 * np.cos(PosAng) - c2 * np.sin(PosAng)
+    c2 = c1 * np.sin(PosAng) + c2 * np.cos(PosAng)
+    c1 = c1prov  # Now centroid coordinates are in North-East system, but still relative to lens
+
+
+    c1s = c1 + np.array(results[3])
+    c2s = c2 + np.array(results[4])
+
+    return c1s, c2s
 
 
 def CombineNCentroids(results,g, background_centroids_ra,background_centroids_dec,g_background):
@@ -287,7 +345,7 @@ def add_astrometric_noise(F146_data,noise_floor,magnitudes):
     return F146_data
 
 
-def plot_centroids(F146_data,parameters, savepath, windowsize = 1,):
+def plot_centroids(F146_data,parameters, savepath, windowsize = 1,scont=None):
     fig, axs = plt.subplots(1, 2, figsize=(10, 5), layout='constrained', dpi=100)
     ax = axs[0]
     ax.plot(F146_data['HJD_prime'], F146_data['mag'], '.', label='GULLS output')
@@ -299,28 +357,48 @@ def plot_centroids(F146_data,parameters, savepath, windowsize = 1,):
     ax.set_xlim(parameters[6] - np.exp(parameters[5]), parameters[6] + np.exp(parameters[5]))
 
     ax = axs[1]
-    ax.errorbar(F146_data['measured_centroid_RA'],F146_data['measured_centroid_Dec'],xerr = F146_data['measured_centroid_RA_error'],
-    yerr = F146_data['measured_centroid_Dec_error'], color='lime', markersize=0.1,marker='.',zorder=0,linewidth=0, elinewidth=0.1)
-
-    ax.plot(F146_data['source_centroid_RA'], F146_data['source_centroid_Dec'], '.', color='blue', markersize=0.1,zorder=10)
+    #ax.errorbar(F146_data['measured_centroid_RA'],F146_data['measured_centroid_Dec'],xerr = F146_data['measured_centroid_RA_error'],
+    #yerr = F146_data['measured_centroid_Dec_error'], color='lime', markersize=0.1,marker='.',zorder=0,linewidth=0, elinewidth=0.1)
+    #F146_data['cont_centroid_RA'] = source_centroid2[1]
+    #F146_data['cont_centroid_Dec'] = source_centroid2[0]
+    if scont is not None:
+        ax.plot(scont[1], scont[0], '.', color='skyblue',
+            markersize=0.1, zorder=10)
+    ax.plot(F146_data['source_centroid_RA'], F146_data['source_centroid_Dec'], '.', color='blue',
+            markersize=0.1, zorder=10)
+    #ax.plot(F146_data['nodef_source_centroid_RA'], F146_data['nodef_source_centroid_Dec'], '.', color='blue', markersize=0.1,zorder=10)
     ax.plot(F146_data['lens_centroid_RA'], F146_data['lens_centroid_Dec'], '.', color='black', markersize=0.1,zorder=10)
     #ax.plot(F146_data['lens_source_centroid_RA'], F146_data['lens_source_centroid_Dec'], '.', color='black', markersize=0.1,zorder=10)
     ax.plot(F146_data['true_centroid_RA'],F146_data['true_centroid_Dec'], '.', color='coral', markersize=0.1,zorder=10)
 
-
-    ax.plot(-1000, 1000, '.', label='measured centroid', markersize=10, color='lime')
-    ax.plot(-1000, 1000, '--', label='source centroid', markersize=10, color='blue')
+    #ax.plot(-1000, 1000, '.', label='measured centroid', markersize=10, color='lime')
+    #ax.plot(-1000, 1000, '--', label='source centroid', markersize=10, color='red')
+    #ax.plot(-1000, 1000, '--', label='non-deflected source centroid', markersize=10, color='blue')
     ax.plot(-1000, 1000, '--', label='lens centroid', markersize=10, color='black')
     #ax.plot(-1000, 1000, '--', label='lens source centroid', markersize=10, color='black')
     ax.plot(-1000, 1000, '--', label='combined centroid', markersize=10, color='coral')
+
+
+
     ax.legend()
     ran = windowsize
     ax.set_ylim(-ran, ran)
     ax.set_xlim(ran, -ran)
     ax.set_xlabel('dRA (mas)')
     ax.set_ylabel('dDec (mas)')
+
+
+    # ax = axs[1]
+    # deflection_RA = F146_data['source_centroid_RA'] - F146_data['nodef_source_centroid_RA']
+    # deflection_Dec = F146_data['source_centroid_Dec'] - F146_data['nodef_source_centroid_Dec']
+    # ax.plot(deflection_RA, deflection_Dec, '.', color='black',
+    #         markersize=0.1, zorder=10)
+    # ax.plot(-1000, 1000, '--', label='Source Deflection', markersize=10, color='black')
+    # ax.set_ylim(-ran, ran)
+    # ax.set_xlim(ran, -ran)
+    # ax.legend()
     plt.savefig(savepath)
-    #plt.show()
+    plt.show()
 
 def find_event_in_catalog(catalog,event_name_):
     '''
@@ -336,19 +414,25 @@ def find_event_in_catalog(catalog,event_name_):
 if __name__ == "__main__":
     catalog_path = "./OMPLDG_croin_cassan.sample.csv" # catalog
 
-    events_directory_path =  "/Users/jmbrashe/Downloads/sample_rtmodel_v2.4"
+    events_directory_path = "/Users/jmbrashe/VBBOrbital/AstrometryGenerator/sample_rtmodel_v3.2_ICGS"
+        #"/Users/jmbrashe/Downloads/sample_rtmodel_v2.4"
     #events_directory_path = "./sample_rtmodel_v3.2" # results from Stela's runs
     satellitedir = "./satellitedir" # Ephemeris in VBM format
     output_dir = sys.argv[1] #Where you want to save the files
     plot_folder = sys.argv[2]
     noise_floor = float(sys.argv[3])
     make_plot = True
-    ran = 15
+    ran = 30
 
-    event_names = ['0_955_165', '0_164_1588', '0_601_2068', '0_640_1938', '1_755_2163', '0_917_59', '0_10_2937', '0_1002_785',
-             '0_7_1131', '2_1001_1542', '0_837_1827']
-    model_names = ['LXmyfit-0.txt', 'LXmyfit-0.txt', 'LXmyfit-1.txt', 'LXmyfit-1.txt', 'LXmyfit-0.txt', 'LXmyfit-3.txt',
-                  'LXmyfit-0.txt', 'LXmyfit-0.txt', 'LXmyfit-1.txt', 'LXmyfit-0.txt', 'LXmyfit-0.txt']
+    event_names = ['0_874_19']
+        #['0_129_1096', '0_161_1727', '0_638_2805', '0_641_1086', '0_920_1857', '0_955_567']
+   # ['0_955_165', '0_164_1588', '0_601_2068', '0_640_1938', '1_755_2163', '0_917_59', '0_10_2937', '0_1002_785',
+             #'0_7_1131', '2_1001_1542', '0_837_1827']
+    model_names = ['LX0013-1.txt']
+
+        #['LXmyfit-2.txt','LXmyfit-0.txt','LXmyfit-0.txt','LXmyfit-0.txt','LXmyfit-3.txt','LXmyfit-1.txt']
+    #['LXmyfit-0.txt', 'LXmyfit-0.txt', 'LXmyfit-1.txt', 'LXmyfit-1.txt', 'LXmyfit-0.txt', 'LXmyfit-3.txt',
+                  #'LXmyfit-0.txt', 'LXmyfit-0.txt', 'LXmyfit-1.txt', 'LXmyfit-0.txt', 'LXmyfit-0.txt']
     for i in range(len(event_names)):
         main(catalog_path_=catalog_path,events_directory_path_=events_directory_path,satellitedir_=satellitedir,
          event_name_='event_'+event_names[i],model_name_=model_names[i],output_dir_=output_dir,plot_folder =plot_folder,windowsize=ran,noisefloor = noise_floor)
